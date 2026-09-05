@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+
+"""Main entry point to xgptopdf. See README.md for more details"""
+
+import sys
+import os
+import argparse
+import requests
+
+from execute import execute
+from document import Document
+from cmd_printer import CmdPrinter
+from pdf_printer import PDFPrinter
+from text_printer import TextPrinter
+from printer_options import PrinterOptions
+from utils import error, info
+import font
+import utils
+
+
+def print_usage():
+    """Print command usage and exit."""
+    print(("Usage: xgptopdf [-hv] [-f fmt] [-F font_dir] " +
+           "[-O option]... input [-o output]"))
+    print("")
+    print("-v: print verbose messages about what the program is doing")
+    print("-f fmt: set format for output (pdf, txt, cmd) (default pdf)")
+    print(f"-F font_dir: where to find fonts (default {font.get_font_dir()})")
+    print("-O options: set XGP options, each must be KEY=VAL")
+    sys.exit(0)
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('-h', action='store_true')
+    parser.add_argument('-v', action='store_true')
+    parser.add_argument('-o', type=str)
+    parser.add_argument('-f', type=str)
+    parser.add_argument('-F', type=str)
+    parser.add_argument("-O", action="append")
+    parser.add_argument('input', nargs='?')
+
+    args, _ = parser.parse_known_args()
+
+    # Help
+    if args.h:
+        print_usage()
+
+    # Verbose
+    if args.v:
+        utils.print_info_messages = True
+
+    # Must provide an input
+    if not args.input:
+        error("Error: No input specified.")
+
+    # Format defaults to PDF, must be one of the 3 options
+    if not args.f:
+        args.f = "pdf"
+    if args.f not in ('pdf', 'txt', 'cmd'):
+        error(f"Error: Invalid format {args.f} - must be pdf, txt or cmd")
+
+    # Font directory
+    if args.F:
+        font.font_dir = args.F
+
+    # XGP options, eg TMAR=10, FONT-1=/path/to/font
+    xgp_opts = {}
+    if args.O:
+        for opt in args.O:
+            if opt.find('=') < 0:
+                error(f"Error: invalid XGP option {opt}")
+            key, val = opt.split('=')
+            xgp_opts[key] = val
+
+    return args.input, args.o, args.f, xgp_opts
+
+
+def get_input_lines(input_source):
+    """Read lines of octal numbers from input_source, which could be a
+    local file, an URL or a saildart document."""
+    # Process Input Resource
+    lines = []
+    source_url = None
+    source_file = None
+
+    # Get lines of octal numbers from input source
+    if input_source.startswith(('http://', 'https://')):
+        r = requests.get(input_source, timeout=30)
+        r.raise_for_status()
+        lines = r.text.splitlines()
+        source_url = input_source
+    elif os.path.exists(input_source):
+        with open(input_source, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+            source_file = input_source
+    elif ('[' in input_source and ']' in input_source and
+          '/' not in input_source):
+        source_url = f"https://www.saildart.org/{input_source}_octal"
+        info(f"Fetching data from {source_url}")
+        r = requests.get(source_url, timeout=30)
+        r.raise_for_status()
+        lines = r.text.splitlines()
+    elif input_source == '-':
+        lines = sys.stdin.read().splitlines()
+    else:
+        error(f"Error: Invalid input source '{input_source}'")
+
+    return lines, source_file, source_url
+
+
+def determine_output_file(fmt, source_file, source_url):
+    """Determine what the output filename should be."""
+    ext = f".{fmt}"
+    if source_file:
+        base = os.path.basename(source_file)
+        out_name = f"./{base}{ext}"
+    elif source_url:
+        path_part = source_url.split('/')[-1]
+        path_part = path_part.replace('_octal', '')
+        out_name = f"{path_part}{ext}"
+    else:
+        out_name = "-"  # Default for stdout
+    return out_name
+
+
+def main():
+    """Main program entry point."""
+    # Collect input, output and options
+    input_source, output_file, fmt, cmdline_options = parse_args()
+    input_lines, source_file, source_url = get_input_lines(input_source)
+    if not output_file:
+        output_file = determine_output_file(fmt, source_file, source_url)
+    # The Document is the stream of input words from the file to be printed
+    doc = Document(input_lines)
+    # Printer options come from the page envelop and can be overriden
+    # by the user.
+    options = PrinterOptions(doc.options, cmdline_options)
+    options.dump()
+    # Create a Printer object based on the desired output format
+    if fmt == 'cmd':
+        printer = CmdPrinter(output_file, options)
+    elif fmt == 'txt':
+        printer = TextPrinter(output_file, options)
+    else:
+        printer = PDFPrinter(output_file, options)
+    # Read commands from doc and output to printer
+    execute(doc, printer)
+    printer.finish()
+
+
+if __name__ == "__main__":
+    main()

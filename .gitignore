@@ -1,0 +1,5 @@
+samples/
+./*.pdf
+*.cmd
+__pycache__/
+
