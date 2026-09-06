@@ -15,6 +15,8 @@ and it will create a file `YUMMY.XGP[P,DOC]1.pdf` in your current directory.
 </p>
 
 See the complete PDF, and other sample output, [here](./examples/).
+This [blog post](https://timereshared.com/waits-xgp/) also provides
+more context.
 
 ## Background
 
